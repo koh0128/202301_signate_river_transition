@@ -155,6 +155,8 @@ class ScoringService(object):
         cls.model_5_22 = pickle.load(open(model_path + '/lgbm_model_fold5_22.pkl', 'rb'))
         cls.model_5_23 = pickle.load(open(model_path + '/lgbm_model_fold5_23.pkl', 'rb'))
 
+        cls.station_median = pd.read_csv(model_path + '/station_median.csv')
+
         return True
 
     @classmethod
@@ -327,6 +329,7 @@ class ScoringService(object):
         exception_station_list = ['大谷池', '白川']
 
         try:
+
             water_df = pd.DataFrame(waterlevel)
             unique_water_df = water_df[
                 ~water_df['station'].isin(exception_station_list)
@@ -338,9 +341,18 @@ class ScoringService(object):
             normal_water_df['value'] = normal_water_df['value'].replace({'M':np.nan, '*':np.nan, '-':np.nan, '--':np.nan, '**':np.nan})
             normal_water_df['median'] = normal_water_df.groupby(['station', 'river'])['value'].transform('median')
             normal_water_df['value'] = np.where(normal_water_df['value'].isnull(), normal_water_df['median'], normal_water_df['value'])
+
+            normal_water_df = pd.merge(
+                normal_water_df,
+                cls.station_median,
+                on = 'station',
+                how = 'left'
+            )
+            normal_water_df['value'] = np.where(normal_water_df['value'].isnull(), normal_water_df['station_median'], normal_water_df['value'])
+
             normal_water_df['value'] = normal_water_df['value'].fillna(0.0)
             normal_water_df['value'] = normal_water_df['value'].astype(float)
-            normal_water_df = normal_water_df.drop(columns = 'median')
+            normal_water_df = normal_water_df.drop(columns = ['median', 'station_median'])
 
             abnormal_water_df['value'] = abnormal_water_df['value'].replace({'M':np.nan, '*':np.nan, '-':np.nan, '--':np.nan, '**':np.nan})
             
@@ -349,8 +361,23 @@ class ScoringService(object):
             for exception_station in exception_station_list:
                 
                 tmp_abnormal_water_df = abnormal_water_df[abnormal_water_df['station'] == exception_station]
+
+                #1/20追加
+                tmp_abnormal_water_df['value'] = tmp_abnormal_water_df['value'].replace({'M':np.nan, '*':np.nan, '-':np.nan, '--':np.nan, '**':np.nan})
+    
                 tmp_abnormal_water_df['value'] = tmp_abnormal_water_df['value'].fillna(tmp_abnormal_water_df['value'].median())
+
+                #1/20追加
+                tmp_abnormal_water_df = pd.merge(
+                    tmp_abnormal_water_df,
+                    cls.station_median,
+                    on = 'station',
+                    how = 'left'
+                )
+                tmp_abnormal_water_df['value'] = np.where(tmp_abnormal_water_df['value'].isnull(), tmp_abnormal_water_df['station_median'], tmp_abnormal_water_df['value'])
+
                 tmp_abnormal_water_df['value'] = tmp_abnormal_water_df['value'].astype(float)
+                tmp_abnormal_water_df = tmp_abnormal_water_df.drop(columns = 'station_median')
 
                 filled_abnormal_water_df = pd.concat([filled_abnormal_water_df, tmp_abnormal_water_df], axis = 0).reset_index(drop = True)
 
@@ -390,10 +417,8 @@ class ScoringService(object):
 
             merged = pd.merge(pd.DataFrame(stations, columns=['station']), all_pred_water_df)
             merged['value'] = merged['value'].replace({'M':0.0, '*':0.0, '-':0.0, '--': 0.0, '**':0.0})
-            merged['value'] = merged['value'].fillna(method ='bfill')
+            merged['value'] = merged['value'].fillna(method ='ffill')
             merged['value'] = merged['value'].astype(float)
-
-            merged['value'] = np.where((merged['station'] == '大谷池') & (merged['value'] < 10), 302, merged['value'])
 
             prediction = merged[['hour', 'station', 'value']].to_dict('records')
             return prediction
@@ -404,11 +429,18 @@ class ScoringService(object):
             merged['value'] = merged['value'].replace({'M':np.nan, '*':np.nan, '-':np.nan, '--':np.nan, '**':np.nan}) # 欠損値を0.0に入れ替える
             merged['median'] = merged.groupby(['station', 'river'])['value'].transform('median')
             merged['value'] = np.where(merged['value'].isnull(), merged['median'], merged['value'])
+
+            merged = pd.merge(
+                merged,
+                cls.station_median,
+                on = 'station',
+                how = 'left'
+            )
+            merged['value'] = np.where(merged['value'].isnull(), merged['station_median'], merged['value'])
+
             merged['value'] = merged['value'].fillna(0.0)                                                # その他の欠損値を0.0に入れ替える
             merged['value'] = merged['value'].astype(float)                                              # float型に変換する
-            merged = merged.drop(columns = 'median')
-
-            merged['value'] = np.where((merged['station'] == '大谷池') & (merged['value'] < 10), 302, merged['value'])
+            merged = merged.drop(columns = ['median', 'station_median'])
 
             prediction = merged[['hour', 'station', 'value']].to_dict('records')                         # DataFrameをlist型に変換する
 
